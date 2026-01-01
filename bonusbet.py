@@ -316,7 +316,67 @@ class ArbitrageBot:
 
 arb_bot = ArbitrageBot()
 
-class BonusBetModal(discord.ui.Modal, title='Generate Your Bonus Bet Opportunity'):
+class BookmakerSelectView(discord.ui.View):
+    def __init__(self, amount: float):
+        super().__init__(timeout=180)
+        self.amount = amount
+        self.selected_bookmaker = None
+        
+        # Create select menu with all bookmakers
+        select = discord.ui.Select(
+            placeholder="Choose your bookmaker...",
+            options=[
+                discord.SelectOption(label="Sportsbet", value="sportsbet", emoji="🎰"),
+                discord.SelectOption(label="TAB", value="tab", emoji="🏇"),
+                discord.SelectOption(label="PointsBet", value="pointsbet", emoji="🎯"),
+                discord.SelectOption(label="Ladbrokes", value="ladbrokes", emoji="🎲"),
+                discord.SelectOption(label="Neds", value="neds", emoji="🏈"),
+                discord.SelectOption(label="Unibet", value="unibet", emoji="⚽"),
+                discord.SelectOption(label="BetRight", value="betright", emoji="✅"),
+                discord.SelectOption(label="BlueBet", value="bluebet", emoji="🔵"),
+                discord.SelectOption(label="TopBetta", value="topbetta", emoji="🔝"),
+                discord.SelectOption(label="Betr", value="betr", emoji="💰"),
+                discord.SelectOption(label="PickleBet", value="picklebet", emoji="🥒"),
+            ],
+            custom_id="bookmaker_select"
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+    
+    async def select_callback(self, interaction: discord.Interaction):
+        self.selected_bookmaker = interaction.data['values'][0]
+        
+        loading_embed = discord.Embed(
+            title="🔍 Finding Your Best 2-Way Opportunity...",
+            description=f"Scanning all sports (excluding soccer) for opportunities where your ${self.amount:,.0f} bonus bet is on **{self.selected_bookmaker.title()}**...",
+            color=0xffaa00
+        )
+        await interaction.response.edit_message(embed=loading_embed, view=None)
+        
+        try:
+            opportunity = await arb_bot.find_best_opportunity(self.selected_bookmaker, self.amount)
+            
+            if not opportunity:
+                error_embed = discord.Embed(
+                    title="❌ No Opportunities Found",
+                    description=f"Could not find any 2-way opportunities for **{self.selected_bookmaker.title()}** at this time. Please try again later.",
+                    color=0xff0000
+                )
+                await interaction.edit_original_response(embed=error_embed)
+                return
+            
+            embed = arb_bot.create_opportunity_embed(opportunity)
+            await interaction.edit_original_response(embed=embed)
+        except Exception as e:
+            print(f"Error in bonus bet generation: {e}")
+            error_embed = discord.Embed(
+                title="❌ Error",
+                description="Something went wrong while finding opportunities. Please try again.",
+                color=0xff0000
+            )
+            await interaction.edit_original_response(embed=error_embed)
+
+class BonusBetModal(discord.ui.Modal, title='Enter Your Bonus Bet Amount'):
     def __init__(self):
         super().__init__(timeout=300)
 
@@ -325,13 +385,6 @@ class BonusBetModal(discord.ui.Modal, title='Generate Your Bonus Bet Opportunity
         placeholder='Enter amount (e.g., 50, 100, 250)',
         required=True,
         max_length=10
-    )
-
-    bookmaker = discord.ui.TextInput(
-        label='Your Bookmaker',
-        placeholder='Enter bookmaker name (e.g., sportsbet, tab, pointsbet)',
-        required=True,
-        max_length=20
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -347,37 +400,14 @@ class BonusBetModal(discord.ui.Modal, title='Generate Your Bonus Bet Opportunity
             )
             return
 
-        bookmaker_input = self.bookmaker.value.lower().strip()
-        selected_bookmaker = next((b for b in SUPPORTED_BOOKMAKERS if bookmaker_input in b or b in bookmaker_input), None)
-
-        if not selected_bookmaker:
-            bookmaker_list = ', '.join([bm.title() for bm in SUPPORTED_BOOKMAKERS[:8]])
-            await interaction.followup.send(
-                f"❌ Bookmaker '{self.bookmaker.value}' not supported.\n\n"
-                f"**Supported bookmakers:** {bookmaker_list}, and more.\n"
-                f"Please try again with a supported bookmaker name.", ephemeral=True
-            )
-            return
-
-        loading_embed = discord.Embed(
-            title="🔍 Finding Your Best 2-Way Opportunity...",
-            description=f"Scanning all sports (excluding soccer) for opportunities where your ${amount:,.0f} bonus bet is on **{selected_bookmaker.title()}**...",
-            color=0xffaa00
+        # Show bookmaker selection
+        select_embed = discord.Embed(
+            title="📱 Select Your Bookmaker",
+            description=f"Choose the bookmaker where you have your **${amount:,.0f}** bonus bet:",
+            color=0x00aaff
         )
-        await interaction.followup.send(embed=loading_embed, ephemeral=True)
-
-        try:
-            opportunity = await arb_bot.find_best_opportunity(selected_bookmaker, amount)
-            embed = arb_bot.create_opportunity_embed(opportunity)
-            await interaction.edit_original_response(embed=embed)
-        except Exception as e:
-            print(f"Error in bonus bet generation: {e}")
-            error_embed = discord.Embed(
-                title="❌ Error",
-                description="Something went wrong while finding opportunities. Please try again.",
-                color=0xff0000
-            )
-            await interaction.edit_original_response(embed=error_embed)
+        view = BookmakerSelectView(amount)
+        await interaction.followup.send(embed=select_embed, view=view, ephemeral=True)
 
 class PersistentView(discord.ui.View):
     def __init__(self):
