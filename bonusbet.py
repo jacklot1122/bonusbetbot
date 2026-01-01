@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import requests
+import aiohttp
 import json
 from datetime import datetime, timedelta
 import asyncio
@@ -58,6 +58,18 @@ class ArbitrageBot:
         self.cache = {}
         self.cache_expiry = {}
         self.search_task = None
+        self.session = None
+    
+    async def get_session(self):
+        """Get or create aiohttp session"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+        return self.session
+    
+    async def close_session(self):
+        """Close aiohttp session"""
+        if self.session and not self.session.closed:
+            await self.session.close()
     
     async def add_to_queue(self, user_id: int, user_mention: str, amount: float, bookmaker: str, search_mode: str, interaction: discord.Interaction):
         """Add a search request to the queue"""
@@ -151,18 +163,27 @@ class ArbitrageBot:
     async def get_sports(self) -> List[Dict]:
         """Fetch available sports from The Odds API"""
         try:
+            session = await self.get_session()
             url = f"{ODDS_API_BASE}/sports"
             params = {'apiKey': ODDS_API_KEY}
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            sports = response.json()
             
-            # Filter out soccer and inactive sports
-            filtered_sports = [
-                sport for sport in sports 
-                if sport.get('active', False) and not self.is_soccer_related(sport.get('title', ''))
-            ]
-            return filtered_sports
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status != 200:
+                    print(f"Error fetching sports: HTTP {response.status}")
+                    return []
+                
+                sports = await response.json()
+                
+                # Filter out soccer and inactive sports
+                # Limit to popular Australian sports to reduce API calls
+                priority_sports = ['aussierules_afl', 'rugbyleague_nrl', 'basketball_nba', 'cricket_big_bash']
+                filtered_sports = [
+                    sport for sport in sports 
+                    if sport.get('active', False) 
+                    and not self.is_soccer_related(sport.get('title', ''))
+                    and (sport.get('key') in priority_sports or len(filtered_sports) < 10)  # Limit to 10 sports max
+                ]
+                return filtered_sports[:10]  # Hard limit to prevent too many API calls
         except Exception as e:
             print(f"Error fetching sports: {e}")
             return []
@@ -170,6 +191,7 @@ class ArbitrageBot:
     async def get_odds(self, sport_key: str, markets: str) -> List[Dict]:
         """Fetch odds for a specific sport and market"""
         try:
+            session = await self.get_session()
             url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
             params = {
                 'apiKey': ODDS_API_KEY,
@@ -178,9 +200,22 @@ class ArbitrageBot:
                 'oddsFormat': 'decimal',
                 'bookmakers': ','.join(SUPPORTED_BOOKMAKERS)
             }
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            return response.json()
+            
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 401:
+                    print(f"API key unauthorized for {sport_key}/{markets}")
+                    return []
+                elif response.status == 422:
+                    # Market not available for this sport, skip silently
+                    return []
+                elif response.status != 200:
+                    print(f"Error fetching odds for {sport_key}/{markets}: HTTP {response.status}")
+                    return []
+                
+                return await response.json()
+        except asyncio.TimeoutError:
+            print(f"Timeout fetching odds for {sport_key}/{markets}")
+            return []
         except Exception as e:
             print(f"Error fetching odds for {sport_key}/{markets}: {e}")
             return []
@@ -331,6 +366,9 @@ class ArbitrageBot:
                                 # In quick mode, return first opportunity that meets threshold
                                 if search_mode == 'quick' and calc['guaranteed_return'] >= quick_threshold:
                                     return best_opportunity
+                
+                # Add small delay between API calls to prevent rate limiting
+                await asyncio.sleep(0.5)
         
         return best_opportunity
 
@@ -607,4 +645,9 @@ if __name__ == "__main__":
         print("Error: Missing CHANNEL_ID environment variable")
     else:
         print("Starting Discord 2-Way Bonus Bet Turnover Bot...")
-        bot.run(DISCORD_TOKEN)
+        try:
+            bot.run(DISCORD_TOKEN)
+        finally:
+            # Cleanup
+            if arb_bot.session and not arb_bot.session.closed:
+                asyncio.run(arb_bot.close_session())
