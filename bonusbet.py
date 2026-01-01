@@ -43,43 +43,10 @@ SOCCER_KEYWORDS = [
 def create_interface_embed():
     """Create the main interface embed"""
     embed = discord.Embed(
-        title="🎯 2-Way Bonus Bet Turnover Bot",
-        description=(
-            "**Convert your bonus bet into guaranteed profit!**\n\n"
-            "This bot finds **THE single best 2-way opportunity** using your selected bookmaker and bonus amount.\n\n"
-            "✅ **2-Way Markets Only:** Spreads, Totals, 2-way H2H, Player Props\n"
-            "🚫 **Soccer Excluded:** No 3-way market complications\n"
-            "💰 **Return Shown Regardless of %**\n"
-            "⏰ **Time Filter:** Next 7 days only\n"
-            "🌏 **Region:** Australian bookmakers"
-        ),
-        color=0x00ff88
+        title="🎯 Want to use your bonus bet smart?",
+        description="Click below to begin:",
+        color=0x5865F2
     )
-
-    embed.add_field(
-        name="🚀 How It Works",
-        value=(
-            "1. Click the button below\n"
-            "2. Enter your bonus bet amount\n"
-            "3. Select your bookmaker\n"
-            "4. Get THE best opportunity"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="🎯 What You Get",
-        value=(
-            "• **Single best result** tailored to your bookmaker\n"
-            "• **Exact hedge amounts** for your bonus bet size\n"
-            "• **Return % even if low**\n"
-            "• **Private results** (ephemeral responses)"
-        ),
-        inline=False
-    )
-
-    embed.set_footer(text="🔒 All interactions are private • 2-way markets only • Soccer excluded")
-
     return embed
 
 class ArbitrageBot:
@@ -484,9 +451,8 @@ class PersistentView(discord.ui.View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label='🧠 Generate a Bonus Bet for Me',
+        label='Generate a Bonus Bet for Me',
         style=discord.ButtonStyle.primary,
-        emoji='🧠',
         custom_id='generate_bonus_bet_button'
     )
     async def generate_bonus_bet(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -505,7 +471,7 @@ async def on_ready():
                 async for message in channel.history(limit=50):
                     if message.author == bot.user and message.embeds:
                         embed = message.embeds[0]
-                        if "2-Way Bonus Bet Turnover" in embed.title:
+                        if "Want to use your bonus bet smart" in embed.title:
                             await message.edit(embed=create_interface_embed(), view=PersistentView())
                             return
                 embed = create_interface_embed()
