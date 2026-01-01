@@ -18,6 +18,10 @@ ODDS_API_KEY = os.getenv('ODDS_API_KEY')
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0'))  # Set your channel ID
 
+# Queue for pending searches
+search_queue = []
+queue_lock = asyncio.Lock()
+
 # Market priority (higher number = higher priority)
 MARKET_PRIORITY = {
     'spreads': 4,
@@ -53,6 +57,91 @@ class ArbitrageBot:
     def __init__(self):
         self.cache = {}
         self.cache_expiry = {}
+        self.search_task = None
+    
+    async def add_to_queue(self, user_id: int, user_mention: str, amount: float, bookmaker: str, search_mode: str, interaction: discord.Interaction):
+        """Add a search request to the queue"""
+        async with queue_lock:
+            search_queue.append({
+                'user_id': user_id,
+                'user_mention': user_mention,
+                'amount': amount,
+                'bookmaker': bookmaker,
+                'search_mode': search_mode,
+                'interaction': interaction,
+                'attempts': 0,
+                'added_at': datetime.now()
+            })
+            print(f"Added search to queue for user {user_id}: ${amount} on {bookmaker} ({search_mode} mode)")
+    
+    async def process_queue(self):
+        """Background task that processes the search queue every 5 minutes"""
+        await bot.wait_until_ready()
+        print("Queue processor started - checking every 5 minutes")
+        
+        while not bot.is_closed():
+            try:
+                async with queue_lock:
+                    if search_queue:
+                        print(f"Processing {len(search_queue)} queued searches...")
+                        
+                        for search in search_queue[:]:  # Copy to avoid modification during iteration
+                            search['attempts'] += 1
+                            print(f"Attempting search {search['attempts']} for user {search['user_id']}")
+                            
+                            try:
+                                opportunity = await self.find_best_opportunity(
+                                    search['bookmaker'], 
+                                    search['amount'], 
+                                    search['search_mode']
+                                )
+                                
+                                if opportunity:
+                                    # Found an opportunity! Notify the user
+                                    embed = self.create_opportunity_embed(opportunity, search['search_mode'])
+                                    embed.set_footer(text=f"✅ Found after {search['attempts']} search(es) | Searched every 5 minutes")
+                                    
+                                    try:
+                                        # Try to send as a follow-up to original interaction
+                                        channel = bot.get_channel(CHANNEL_ID)
+                                        if channel:
+                                            await channel.send(
+                                                content=f"{search['user_mention']} 🎉 **Your bonus bet opportunity is ready!**",
+                                                embed=embed
+                                            )
+                                            print(f"Notified user {search['user_id']} - opportunity found!")
+                                    except Exception as e:
+                                        print(f"Error notifying user: {e}")
+                                    
+                                    # Remove from queue
+                                    search_queue.remove(search)
+                                else:
+                                    print(f"No opportunity found yet for user {search['user_id']}")
+                                    
+                                    # Remove after 24 hours (288 attempts at 5 min intervals)
+                                    if search['attempts'] >= 288:
+                                        try:
+                                            channel = bot.get_channel(CHANNEL_ID)
+                                            if channel:
+                                                await channel.send(
+                                                    content=f"{search['user_mention']} ⏰ Your bonus bet search has expired after 24 hours. Please try again with different parameters.",
+                                                )
+                                        except:
+                                            pass
+                                        search_queue.remove(search)
+                                        print(f"Removed expired search for user {search['user_id']}")
+                                
+                            except Exception as e:
+                                print(f"Error processing search for user {search['user_id']}: {e}")
+                    
+                    else:
+                        print("Queue is empty, waiting...")
+                
+            except Exception as e:
+                print(f"Error in queue processor: {e}")
+            
+            # Wait 5 minutes before next check
+            await asyncio.sleep(300)  # 300 seconds = 5 minutes
     
     def is_soccer_related(self, text: str) -> bool:
         """Check if text contains soccer-related keywords"""
@@ -298,10 +387,12 @@ class ArbitrageBot:
 arb_bot = ArbitrageBot()
 
 class SearchModeView(discord.ui.View):
-    def __init__(self, amount: float, bookmaker: str):
+    def __init__(self, amount: float, bookmaker: str, user_id: int, user_mention: str):
         super().__init__(timeout=180)
         self.amount = amount
         self.bookmaker = bookmaker
+        self.user_id = user_id
+        self.user_mention = user_mention
         
         # Create select menu for search mode
         select = discord.ui.Select(
@@ -330,26 +421,50 @@ class SearchModeView(discord.ui.View):
         
         mode_text = "**Quick Return**" if search_mode == "quick" else "**Best Return Possible**"
         loading_embed = discord.Embed(
-            title="🔍 Finding Your Opportunity..." if search_mode == "quick" else "🔍 Deep Scanning for Best Return...",
-            description=f"Mode: {mode_text}\nBookmaker: **{self.bookmaker.title()}**\nAmount: **${self.amount:,.0f}**\n\n{'⚡ This will be quick!' if search_mode == 'quick' else '⏳ This may take a moment to find the absolute best return...'}",
+            title="🔍 Searching for Opportunity...",
+            description=f"Mode: {mode_text}\nBookmaker: **{self.bookmaker.title()}**\nAmount: **${self.amount:,.0f}**\n\n⏳ Searching now...",
             color=0xffaa00
         )
         await interaction.response.edit_message(embed=loading_embed, view=None)
         
         try:
+            # Try to find immediately first
             opportunity = await arb_bot.find_best_opportunity(self.bookmaker, self.amount, search_mode)
             
-            if not opportunity:
-                error_embed = discord.Embed(
-                    title="❌ No Opportunities Found",
-                    description=f"Could not find any 2-way opportunities for **{self.bookmaker.title()}** at this time. Please try again later.",
-                    color=0xff0000
+            if opportunity:
+                # Found immediately!
+                embed = arb_bot.create_opportunity_embed(opportunity, search_mode)
+                embed.set_footer(text="✅ Found immediately!")
+                await interaction.edit_original_response(embed=embed)
+            else:
+                # Not found - add to queue for continuous searching
+                await arb_bot.add_to_queue(
+                    self.user_id,
+                    self.user_mention,
+                    self.amount,
+                    self.bookmaker,
+                    search_mode,
+                    interaction
                 )
-                await interaction.edit_original_response(embed=error_embed)
-                return
-            
-            embed = arb_bot.create_opportunity_embed(opportunity, search_mode)
-            await interaction.edit_original_response(embed=embed)
+                
+                queued_embed = discord.Embed(
+                    title="⏰ Added to Search Queue",
+                    description=(
+                        f"No immediate opportunity found for **{self.bookmaker.title()}**.\n\n"
+                        f"**Don't worry!** I'll keep searching for you:\n"
+                        f"• Checking every **5 minutes**\n"
+                        f"• You'll be **@mentioned** when found\n"
+                        f"• Search expires after **24 hours**\n\n"
+                        f"**Your search:**\n"
+                        f"💰 Amount: ${self.amount:,.0f}\n"
+                        f"📱 Bookmaker: {self.bookmaker.title()}\n"
+                        f"⚙️ Mode: {mode_text}"
+                    ),
+                    color=0xffa500
+                )
+                queued_embed.set_footer(text="You can close this message - I'll ping you when ready!")
+                await interaction.edit_original_response(embed=queued_embed)
+                
         except Exception as e:
             print(f"Error in bonus bet generation: {e}")
             error_embed = discord.Embed(
@@ -410,7 +525,7 @@ class BookmakerSelectView(discord.ui.View):
             inline=False
         )
         
-        view = SearchModeView(self.amount, self.selected_bookmaker)
+        view = SearchModeView(self.amount, self.selected_bookmaker, interaction.user.id, interaction.user.mention)
         await interaction.response.edit_message(embed=mode_embed, view=view)
 
 class BonusBetModal(discord.ui.Modal, title='Enter Your Bonus Bet Amount'):
@@ -463,6 +578,11 @@ class PersistentView(discord.ui.View):
 async def on_ready():
     print(f'{bot.user} has logged in!')
     bot.add_view(PersistentView())
+    
+    # Start the queue processor
+    if not arb_bot.search_task or arb_bot.search_task.done():
+        arb_bot.search_task = bot.loop.create_task(arb_bot.process_queue())
+        print("Started background queue processor")
 
     if CHANNEL_ID:
         try:
