@@ -83,25 +83,189 @@ def create_interface_embed():
     return embed
 
 class ArbitrageBot:
-    async def find_best_opportunity(self, selected_bookmaker: str, amount: float) -> Optional[Dict]:
+    def __init__(self):
+        self.cache = {}
+        self.cache_expiry = {}
+    
+    def is_soccer_related(self, text: str) -> bool:
+        """Check if text contains soccer-related keywords"""
+        text_lower = text.lower()
+        return any(keyword in text_lower for keyword in SOCCER_KEYWORDS)
+    
+    async def get_sports(self) -> List[Dict]:
+        """Fetch available sports from The Odds API"""
+        try:
+            url = f"{ODDS_API_BASE}/sports"
+            params = {'apiKey': ODDS_API_KEY}
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            sports = response.json()
+            
+            # Filter out soccer and inactive sports
+            filtered_sports = [
+                sport for sport in sports 
+                if sport.get('active', False) and not self.is_soccer_related(sport.get('title', ''))
+            ]
+            return filtered_sports
+        except Exception as e:
+            print(f"Error fetching sports: {e}")
+            return []
+    
+    async def get_odds(self, sport_key: str, markets: str) -> List[Dict]:
+        """Fetch odds for a specific sport and market"""
+        try:
+            url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
+            params = {
+                'apiKey': ODDS_API_KEY,
+                'regions': 'au',
+                'markets': markets,
+                'oddsFormat': 'decimal',
+                'bookmakers': ','.join(SUPPORTED_BOOKMAKERS)
+            }
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error fetching odds for {sport_key}/{markets}: {e}")
+            return []
+    
+    def calculate_bonus_bet_opportunity(self, bonus_odds: float, hedge_odds: float, amount: float) -> Dict:
+        """Calculate the returns for a bonus bet opportunity"""
+        # Bonus bet: you don't get the stake back, only the winnings
+        bonus_payout_if_wins = (amount * bonus_odds) - amount
+        
+        # Hedge bet: calculate how much to bet to cover the bonus payout
+        hedge_amount = bonus_payout_if_wins / hedge_odds
+        hedge_payout_if_wins = hedge_amount * hedge_odds
+        
+        # Calculate guaranteed return (minimum profit)
+        # If bonus wins: profit = bonus_payout - hedge_amount (what you spent)
+        # If hedge wins: profit = hedge_payout - amount (bonus was free) - hedge_amount
+        profit_if_bonus_wins = bonus_payout_if_wins - hedge_amount
+        profit_if_hedge_wins = hedge_payout_if_wins - hedge_amount
+        
+        guaranteed_return = min(profit_if_bonus_wins, profit_if_hedge_wins)
+        return_percentage = (guaranteed_return / amount) * 100
+        
         return {
-            'sport_title': 'Sample Sport',
-            'home_team': 'Team A',
-            'away_team': 'Team B',
-            'market_display': 'Head to Head',
-            'bonus_bookmaker': selected_bookmaker,
-            'bonus_outcome': 'Team A',
-            'bonus_odds_decimal': 2.5,
-            'bonus_amount': amount,
-            'bonus_payout_if_wins': round((amount * 2.5) - amount, 2),
-            'hedge_bookmaker': 'tab',
-            'hedge_outcome': 'Team B',
-            'hedge_odds_decimal': 1.45,
-            'hedge_amount': round(((amount * 2.5) - amount) / 1.45, 2),
-            'hedge_payout_if_wins': round((((amount * 2.5) - amount) / 1.45) * 1.45, 2),
-            'return_percentage': round(min((amount * 1.5 - ((amount * 2.5 - amount) / 1.45)), (((amount * 2.5 - amount) / 1.45) * 1.45 - amount)) / amount * 100, 1),
-            'guaranteed_return': round(min((amount * 1.5 - ((amount * 2.5 - amount) / 1.45)), (((amount * 2.5 - amount) / 1.45) * 1.45 - amount)), 2),
+            'bonus_payout_if_wins': round(bonus_payout_if_wins, 2),
+            'hedge_amount': round(hedge_amount, 2),
+            'hedge_payout_if_wins': round(hedge_payout_if_wins, 2),
+            'guaranteed_return': round(guaranteed_return, 2),
+            'return_percentage': round(return_percentage, 1)
         }
+    
+    async def find_best_opportunity(self, selected_bookmaker: str, amount: float) -> Optional[Dict]:
+        """Find the single best 2-way opportunity for the selected bookmaker"""
+        best_opportunity = None
+        best_return = float('-inf')
+        
+        # Get available sports
+        sports = await self.get_sports()
+        if not sports:
+            return None
+        
+        # Markets to check (all 2-way)
+        markets_to_check = ['h2h', 'spreads', 'totals']
+        
+        for sport in sports:
+            sport_key = sport['key']
+            sport_title = sport['title']
+            
+            # Check each market type
+            for market_type in markets_to_check:
+                events = await self.get_odds(sport_key, market_type)
+                
+                for event in events:
+                    # Filter events happening within 7 days
+                    commence_time = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
+                    if commence_time > datetime.now().astimezone() + timedelta(days=7):
+                        continue
+                    
+                    home_team = event.get('home_team', '')
+                    away_team = event.get('away_team', '')
+                    
+                    # Skip if teams contain soccer keywords
+                    if self.is_soccer_related(home_team) or self.is_soccer_related(away_team):
+                        continue
+                    
+                    bookmakers = event.get('bookmakers', [])
+                    
+                    # Find odds from selected bookmaker
+                    bonus_bookmaker_data = None
+                    for bookmaker in bookmakers:
+                        if bookmaker['key'] == selected_bookmaker:
+                            bonus_bookmaker_data = bookmaker
+                            break
+                    
+                    if not bonus_bookmaker_data:
+                        continue
+                    
+                    # Get markets for this bookmaker
+                    for market in bonus_bookmaker_data.get('markets', []):
+                        if market['key'] != market_type:
+                            continue
+                        
+                        outcomes = market.get('outcomes', [])
+                        if len(outcomes) != 2:  # Only 2-way markets
+                            continue
+                        
+                        # Try both outcomes as the bonus bet
+                        for i, bonus_outcome in enumerate(outcomes):
+                            hedge_outcome = outcomes[1 - i]
+                            
+                            bonus_odds = bonus_outcome['price']
+                            
+                            # Find best hedge odds from other bookmakers
+                            best_hedge_odds = 0
+                            best_hedge_bookmaker = None
+                            
+                            for other_bookmaker in bookmakers:
+                                if other_bookmaker['key'] == selected_bookmaker:
+                                    continue
+                                
+                                for other_market in other_bookmaker.get('markets', []):
+                                    if other_market['key'] != market_type:
+                                        continue
+                                    
+                                    for outcome in other_market.get('outcomes', []):
+                                        if outcome['name'] == hedge_outcome['name']:
+                                            if outcome['price'] > best_hedge_odds:
+                                                best_hedge_odds = outcome['price']
+                                                best_hedge_bookmaker = other_bookmaker['key']
+                            
+                            if not best_hedge_bookmaker or best_hedge_odds == 0:
+                                continue
+                            
+                            # Calculate opportunity
+                            calc = self.calculate_bonus_bet_opportunity(bonus_odds, best_hedge_odds, amount)
+                            
+                            # Track best opportunity
+                            if calc['guaranteed_return'] > best_return:
+                                best_return = calc['guaranteed_return']
+                                
+                                market_display = {
+                                    'h2h': 'Head to Head',
+                                    'spreads': 'Spread',
+                                    'totals': 'Totals'
+                                }.get(market_type, market_type)
+                                
+                                best_opportunity = {
+                                    'sport_title': sport_title,
+                                    'home_team': home_team,
+                                    'away_team': away_team,
+                                    'market_display': market_display,
+                                    'bonus_bookmaker': selected_bookmaker,
+                                    'bonus_outcome': bonus_outcome['name'],
+                                    'bonus_odds_decimal': bonus_odds,
+                                    'bonus_amount': amount,
+                                    'hedge_bookmaker': best_hedge_bookmaker,
+                                    'hedge_outcome': hedge_outcome['name'],
+                                    'hedge_odds_decimal': best_hedge_odds,
+                                    **calc
+                                }
+        
+        return best_opportunity
 
     def create_opportunity_embed(self, opportunity: Dict) -> discord.Embed:
         embed = discord.Embed(
@@ -238,24 +402,15 @@ async def on_ready():
         try:
             channel = bot.get_channel(CHANNEL_ID)
             if channel:
-                # Check if the interface already exists
-                interface_exists = False
                 async for message in channel.history(limit=50):
                     if message.author == bot.user and message.embeds:
                         embed = message.embeds[0]
                         if "2-Way Bonus Bet Turnover" in embed.title:
-                            interface_exists = True
-                            # Update existing message with persistent view
                             await message.edit(embed=create_interface_embed(), view=PersistentView())
-                            print(f"Updated existing interface message in channel {CHANNEL_ID}")
-                            break
-                
-                # Only post new message if interface doesn't exist
-                if not interface_exists:
-                    embed = create_interface_embed()
-                    view = PersistentView()
-                    await channel.send(embed=embed, view=view)
-                    print(f"Posted new interface message in channel {CHANNEL_ID}")
+                            return
+                embed = create_interface_embed()
+                view = PersistentView()
+                await channel.send(embed=embed, view=view)
         except Exception as e:
             print(f"Error setting up channel interface: {e}")
 
