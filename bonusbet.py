@@ -163,16 +163,20 @@ class ArbitrageBot:
     async def get_sports(self) -> List[Dict]:
         """Fetch available sports from The Odds API"""
         try:
+            print("Fetching sports list from API...")
             session = await self.get_session()
             url = f"{ODDS_API_BASE}/sports"
             params = {'apiKey': ODDS_API_KEY}
             
             async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                print(f"Sports API response status: {response.status}")
                 if response.status != 200:
-                    print(f"Error fetching sports: HTTP {response.status}")
+                    error_text = await response.text()
+                    print(f"Error fetching sports: HTTP {response.status} - {error_text}")
                     return []
                 
                 sports = await response.json()
+                print(f"Fetched {len(sports)} total sports from API")
                 
                 # Filter out soccer and inactive sports
                 # Limit to popular Australian sports to reduce API calls
@@ -187,6 +191,7 @@ class ArbitrageBot:
                         continue
                     if sport.get('key') in priority_sports:
                         filtered_sports.append(sport)
+                        print(f"  ✓ Added priority sport: {sport.get('title')}")
                 
                 # Then add other sports up to limit of 10
                 for sport in sports:
@@ -198,10 +203,14 @@ class ArbitrageBot:
                         continue
                     if sport not in filtered_sports:
                         filtered_sports.append(sport)
+                        print(f"  ✓ Added sport: {sport.get('title')}")
                 
+                print(f"Filtered to {len(filtered_sports)} sports for scanning")
                 return filtered_sports[:10]  # Hard limit to prevent too many API calls
         except Exception as e:
             print(f"Error fetching sports: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     async def get_odds(self, sport_key: str, markets: str) -> List[Dict]:
@@ -219,21 +228,24 @@ class ArbitrageBot:
             
             async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status == 401:
-                    print(f"API key unauthorized for {sport_key}/{markets}")
+                    print(f"  ⚠ API key unauthorized for {sport_key}/{markets}")
                     return []
                 elif response.status == 422:
                     # Market not available for this sport, skip silently
                     return []
                 elif response.status != 200:
-                    print(f"Error fetching odds for {sport_key}/{markets}: HTTP {response.status}")
+                    error_text = await response.text()
+                    print(f"  ⚠ Error fetching odds for {sport_key}/{markets}: HTTP {response.status}")
                     return []
                 
-                return await response.json()
+                events = await response.json()
+                print(f"  → Found {len(events)} events for {sport_key}/{markets}")
+                return events
         except asyncio.TimeoutError:
-            print(f"Timeout fetching odds for {sport_key}/{markets}")
+            print(f"  ⚠ Timeout fetching odds for {sport_key}/{markets}")
             return []
         except Exception as e:
-            print(f"Error fetching odds for {sport_key}/{markets}: {e}")
+            print(f"  ⚠ Error fetching odds for {sport_key}/{markets}: {e}")
             return []
     
     def calculate_bonus_bet_opportunity(self, bonus_odds: float, hedge_odds: float, amount: float) -> Dict:
@@ -270,6 +282,10 @@ class ArbitrageBot:
             amount: The bonus bet amount
             search_mode: 'quick' for fast 60-70% return, 'best' for maximum return
         """
+        print(f"\n{'='*60}")
+        print(f"Starting search for {selected_bookmaker} - ${amount} ({search_mode} mode)")
+        print(f"{'='*60}")
+        
         best_opportunity = None
         best_return = float('-inf')
         quick_threshold = amount * 0.60  # 60% minimum for quick mode
@@ -277,18 +293,24 @@ class ArbitrageBot:
         # Get available sports
         sports = await self.get_sports()
         if not sports:
+            print("❌ No sports available to search")
             return None
         
         # Markets to check (all 2-way)
         markets_to_check = ['h2h', 'spreads', 'totals']
         
+        total_events_checked = 0
+        opportunities_found = 0
+        
         for sport in sports:
             sport_key = sport['key']
             sport_title = sport['title']
+            print(f"\n📊 Checking {sport_title}...")
             
             # Check each market type
             for market_type in markets_to_check:
                 events = await self.get_odds(sport_key, market_type)
+                total_events_checked += len(events)
                 
                 for event in events:
                     # Filter events happening within 7 days
@@ -357,6 +379,7 @@ class ArbitrageBot:
                             # Track best opportunity
                             if calc['guaranteed_return'] > best_return:
                                 best_return = calc['guaranteed_return']
+                                opportunities_found += 1
                                 
                                 market_display = {
                                     'h2h': 'Head to Head',
@@ -379,12 +402,25 @@ class ArbitrageBot:
                                     **calc
                                 }
                                 
+                                print(f"    💰 New best: {calc['return_percentage']:.1f}% return (${calc['guaranteed_return']:.2f})")
+                                
                                 # In quick mode, return first opportunity that meets threshold
                                 if search_mode == 'quick' and calc['guaranteed_return'] >= quick_threshold:
+                                    print(f"\n✅ Quick mode threshold met! Returning result.")
                                     return best_opportunity
                 
                 # Add small delay between API calls to prevent rate limiting
                 await asyncio.sleep(0.5)
+        
+        print(f"\n{'='*60}")
+        print(f"Search complete:")
+        print(f"  • Events checked: {total_events_checked}")
+        print(f"  • Opportunities found: {opportunities_found}")
+        if best_opportunity:
+            print(f"  • Best return: {best_opportunity['return_percentage']:.1f}%")
+        else:
+            print(f"  • No opportunities found")
+        print(f"{'='*60}\n")
         
         return best_opportunity
 
