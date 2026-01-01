@@ -177,12 +177,28 @@ class ArbitrageBot:
                 # Filter out soccer and inactive sports
                 # Limit to popular Australian sports to reduce API calls
                 priority_sports = ['aussierules_afl', 'rugbyleague_nrl', 'basketball_nba', 'cricket_big_bash']
-                filtered_sports = [
-                    sport for sport in sports 
-                    if sport.get('active', False) 
-                    and not self.is_soccer_related(sport.get('title', ''))
-                    and (sport.get('key') in priority_sports or len(filtered_sports) < 10)  # Limit to 10 sports max
-                ]
+                filtered_sports = []
+                
+                # First add priority sports if they're active
+                for sport in sports:
+                    if not sport.get('active', False):
+                        continue
+                    if self.is_soccer_related(sport.get('title', '')):
+                        continue
+                    if sport.get('key') in priority_sports:
+                        filtered_sports.append(sport)
+                
+                # Then add other sports up to limit of 10
+                for sport in sports:
+                    if len(filtered_sports) >= 10:
+                        break
+                    if not sport.get('active', False):
+                        continue
+                    if self.is_soccer_related(sport.get('title', '')):
+                        continue
+                    if sport not in filtered_sports:
+                        filtered_sports.append(sport)
+                
                 return filtered_sports[:10]  # Hard limit to prevent too many API calls
         except Exception as e:
             print(f"Error fetching sports: {e}")
