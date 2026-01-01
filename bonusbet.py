@@ -155,10 +155,17 @@ class ArbitrageBot:
             'return_percentage': round(return_percentage, 1)
         }
     
-    async def find_best_opportunity(self, selected_bookmaker: str, amount: float) -> Optional[Dict]:
-        """Find the single best 2-way opportunity for the selected bookmaker"""
+    async def find_best_opportunity(self, selected_bookmaker: str, amount: float, search_mode: str = 'best') -> Optional[Dict]:
+        """Find the single best 2-way opportunity for the selected bookmaker
+        
+        Args:
+            selected_bookmaker: The bookmaker where the bonus bet will be placed
+            amount: The bonus bet amount
+            search_mode: 'quick' for fast 60-70% return, 'best' for maximum return
+        """
         best_opportunity = None
         best_return = float('-inf')
+        quick_threshold = amount * 0.60  # 60% minimum for quick mode
         
         # Get available sports
         sports = await self.get_sports()
@@ -264,12 +271,19 @@ class ArbitrageBot:
                                     'hedge_odds_decimal': best_hedge_odds,
                                     **calc
                                 }
+                                
+                                # In quick mode, return first opportunity that meets threshold
+                                if search_mode == 'quick' and calc['guaranteed_return'] >= quick_threshold:
+                                    return best_opportunity
         
         return best_opportunity
 
-    def create_opportunity_embed(self, opportunity: Dict) -> discord.Embed:
+    def create_opportunity_embed(self, opportunity: Dict, search_mode: str = 'best') -> discord.Embed:
+        mode_emoji = "⚡" if search_mode == "quick" else "🏆"
+        mode_text = "Quick Return" if search_mode == "quick" else "Best Return"
+        
         embed = discord.Embed(
-            title="🧠 Your Bonus Bet Opportunity",
+            title=f"{mode_emoji} Your Bonus Bet Opportunity ({mode_text})",
             color=0x00ff88
         )
         embed.add_field(
@@ -316,6 +330,68 @@ class ArbitrageBot:
 
 arb_bot = ArbitrageBot()
 
+class SearchModeView(discord.ui.View):
+    def __init__(self, amount: float, bookmaker: str):
+        super().__init__(timeout=180)
+        self.amount = amount
+        self.bookmaker = bookmaker
+        
+        # Create select menu for search mode
+        select = discord.ui.Select(
+            placeholder="Choose your search mode...",
+            options=[
+                discord.SelectOption(
+                    label="🚀 Quick Return (60-70%)",
+                    value="quick",
+                    description="Fast search - finds first good opportunity",
+                    emoji="⚡"
+                ),
+                discord.SelectOption(
+                    label="💎 Best Return Possible",
+                    value="best",
+                    description="Thorough search - finds highest return (slower)",
+                    emoji="🏆"
+                ),
+            ],
+            custom_id="search_mode_select"
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+    
+    async def select_callback(self, interaction: discord.Interaction):
+        search_mode = interaction.data['values'][0]
+        
+        mode_text = "**Quick Return**" if search_mode == "quick" else "**Best Return Possible**"
+        loading_embed = discord.Embed(
+            title="🔍 Finding Your Opportunity..." if search_mode == "quick" else "🔍 Deep Scanning for Best Return...",
+            description=f"Mode: {mode_text}\nBookmaker: **{self.bookmaker.title()}**\nAmount: **${self.amount:,.0f}**\n\n{'⚡ This will be quick!' if search_mode == 'quick' else '⏳ This may take a moment to find the absolute best return...'}",
+            color=0xffaa00
+        )
+        await interaction.response.edit_message(embed=loading_embed, view=None)
+        
+        try:
+            opportunity = await arb_bot.find_best_opportunity(self.bookmaker, self.amount, search_mode)
+            
+            if not opportunity:
+                error_embed = discord.Embed(
+                    title="❌ No Opportunities Found",
+                    description=f"Could not find any 2-way opportunities for **{self.bookmaker.title()}** at this time. Please try again later.",
+                    color=0xff0000
+                )
+                await interaction.edit_original_response(embed=error_embed)
+                return
+            
+            embed = arb_bot.create_opportunity_embed(opportunity, search_mode)
+            await interaction.edit_original_response(embed=embed)
+        except Exception as e:
+            print(f"Error in bonus bet generation: {e}")
+            error_embed = discord.Embed(
+                title="❌ Error",
+                description="Something went wrong while finding opportunities. Please try again.",
+                color=0xff0000
+            )
+            await interaction.edit_original_response(embed=error_embed)
+
 class BookmakerSelectView(discord.ui.View):
     def __init__(self, amount: float):
         super().__init__(timeout=180)
@@ -346,35 +422,29 @@ class BookmakerSelectView(discord.ui.View):
     async def select_callback(self, interaction: discord.Interaction):
         self.selected_bookmaker = interaction.data['values'][0]
         
-        loading_embed = discord.Embed(
-            title="🔍 Finding Your Best 2-Way Opportunity...",
-            description=f"Scanning all sports (excluding soccer) for opportunities where your ${self.amount:,.0f} bonus bet is on **{self.selected_bookmaker.title()}**...",
-            color=0xffaa00
+        # Show search mode selection
+        mode_embed = discord.Embed(
+            title="⚙️ Choose Search Mode",
+            description=(
+                f"**Bookmaker:** {self.selected_bookmaker.title()}\n"
+                f"**Bonus Amount:** ${self.amount:,.0f}\n\n"
+                "**Select your preferred search mode:**"
+            ),
+            color=0x00aaff
         )
-        await interaction.response.edit_message(embed=loading_embed, view=None)
+        mode_embed.add_field(
+            name="⚡ Quick Return (60-70%)",
+            value="Fast search that finds the first good opportunity. Typically returns 60-70% of your bonus bet.",
+            inline=False
+        )
+        mode_embed.add_field(
+            name="🏆 Best Return Possible",
+            value="Comprehensive search across all sports and markets. Takes longer but finds the absolute best return available.",
+            inline=False
+        )
         
-        try:
-            opportunity = await arb_bot.find_best_opportunity(self.selected_bookmaker, self.amount)
-            
-            if not opportunity:
-                error_embed = discord.Embed(
-                    title="❌ No Opportunities Found",
-                    description=f"Could not find any 2-way opportunities for **{self.selected_bookmaker.title()}** at this time. Please try again later.",
-                    color=0xff0000
-                )
-                await interaction.edit_original_response(embed=error_embed)
-                return
-            
-            embed = arb_bot.create_opportunity_embed(opportunity)
-            await interaction.edit_original_response(embed=embed)
-        except Exception as e:
-            print(f"Error in bonus bet generation: {e}")
-            error_embed = discord.Embed(
-                title="❌ Error",
-                description="Something went wrong while finding opportunities. Please try again.",
-                color=0xff0000
-            )
-            await interaction.edit_original_response(embed=error_embed)
+        view = SearchModeView(self.amount, self.selected_bookmaker)
+        await interaction.response.edit_message(embed=mode_embed, view=view)
 
 class BonusBetModal(discord.ui.Modal, title='Enter Your Bonus Bet Amount'):
     def __init__(self):
