@@ -109,19 +109,34 @@ class ArbitrageBot:
                                 )
                                 
                                 if opportunity:
-                                    # Found an opportunity! Notify the user
+                                    # Found an opportunity! Notify the user via DM
                                     embed = self.create_opportunity_embed(opportunity, search['search_mode'])
                                     embed.set_footer(text=f"✅ Found after {search['attempts']} search(es) | Searched every 5 minutes")
                                     
                                     try:
-                                        # Try to send as a follow-up to original interaction
-                                        channel = bot.get_channel(CHANNEL_ID)
-                                        if channel:
-                                            await channel.send(
-                                                content=f"{search['user_mention']} 🎉 **Your bonus bet opportunity is ready!**",
+                                        # Send as DM to keep it private
+                                        user = await bot.fetch_user(search['user_id'])
+                                        if user:
+                                            await user.send(
+                                                content=f"🎉 **Your bonus bet opportunity is ready!**",
                                                 embed=embed
                                             )
-                                            print(f"Notified user {search['user_id']} - opportunity found!")
+                                            print(f"✅ Sent DM to user {search['user_id']} - opportunity found!")
+                                        else:
+                                            print(f"⚠ Could not fetch user {search['user_id']}")
+                                    except discord.Forbidden:
+                                        print(f"⚠ Cannot DM user {search['user_id']} - DMs disabled")
+                                        # Fallback: try to send in channel as last resort
+                                        try:
+                                            channel = bot.get_channel(CHANNEL_ID)
+                                            if channel:
+                                                await channel.send(
+                                                    content=f"{search['user_mention']} 🎉 Your bonus bet opportunity is ready! (Enable DMs for private results)",
+                                                    embed=embed,
+                                                    delete_after=60  # Delete after 1 minute for privacy
+                                                )
+                                        except:
+                                            pass
                                     except Exception as e:
                                         print(f"Error notifying user: {e}")
                                     
@@ -133,10 +148,10 @@ class ArbitrageBot:
                                     # Remove after 24 hours (288 attempts at 5 min intervals)
                                     if search['attempts'] >= 288:
                                         try:
-                                            channel = bot.get_channel(CHANNEL_ID)
-                                            if channel:
-                                                await channel.send(
-                                                    content=f"{search['user_mention']} ⏰ Your bonus bet search has expired after 24 hours. Please try again with different parameters.",
+                                            user = await bot.fetch_user(search['user_id'])
+                                            if user:
+                                                await user.send(
+                                                    content=f"⏰ Your bonus bet search has expired after 24 hours. Please try again with different parameters."
                                                 )
                                         except:
                                             pass
