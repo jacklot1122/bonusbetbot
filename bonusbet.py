@@ -36,9 +36,10 @@ MARKET_PRIORITY = {
 }
 
 # Supported Australian bookmakers
+# Note: bet365_au requires paid API subscription and only covers AFL/NRL
 SUPPORTED_BOOKMAKERS = [
-    'sportsbet', 'tab', 'pointsbet', 'ladbrokes', 'neds', 'unibet',
-    'betright', 'bluebet', 'topbetta', 'betr', 'picklebet', 'bet365'
+    'sportsbet', 'tab', 'pointsbetau', 'ladbrokes_au', 'neds', 'unibet',
+    'betright', 'betr_au', 'bet365_au', 'betfair_ex_au', 'playup', 'boombet', 'tabtouch'
 ]
 
 # Soccer-related keywords to filter out
@@ -596,16 +597,16 @@ class BookmakerSelectView(discord.ui.View):
             options=[
                 discord.SelectOption(label="Sportsbet", value="sportsbet", emoji="🎰"),
                 discord.SelectOption(label="TAB", value="tab", emoji="🏇"),
-                discord.SelectOption(label="PointsBet", value="pointsbet", emoji="🎯"),
-                discord.SelectOption(label="Ladbrokes", value="ladbrokes", emoji="🎲"),
+                discord.SelectOption(label="PointsBet", value="pointsbetau", emoji="🎯"),
+                discord.SelectOption(label="Ladbrokes", value="ladbrokes_au", emoji="🎲"),
                 discord.SelectOption(label="Neds", value="neds", emoji="🏈"),
                 discord.SelectOption(label="Unibet", value="unibet", emoji="⚽"),
                 discord.SelectOption(label="BetRight", value="betright", emoji="✅"),
-                discord.SelectOption(label="BlueBet", value="bluebet", emoji="🔵"),
-                discord.SelectOption(label="TopBetta", value="topbetta", emoji="🔝"),
-                discord.SelectOption(label="Betr", value="betr", emoji="💰"),
-                discord.SelectOption(label="PickleBet", value="picklebet", emoji="🥒"),
-                discord.SelectOption(label="Bet365", value="bet365", emoji="🟢"),
+                discord.SelectOption(label="Betr", value="betr_au", emoji="�"),
+                discord.SelectOption(label="Bet365", value="bet365_au", emoji="�", description="AFL & NRL only"),
+                discord.SelectOption(label="Betfair Exchange", value="betfair_ex_au", emoji="�"),
+                discord.SelectOption(label="PlayUp", value="playup", emoji="🎮"),
+                discord.SelectOption(label="BoomBet", value="boombet", emoji="�"),
             ],
             custom_id="bookmaker_select"
         )
