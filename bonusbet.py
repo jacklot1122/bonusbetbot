@@ -5,7 +5,12 @@ import json
 from datetime import datetime, timedelta
 import asyncio
 import os
+import sys
 from typing import List, Dict, Optional
+
+# Force unbuffered output for Railway logs
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 # Bot setup
 intents = discord.Intents.default()
