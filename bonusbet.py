@@ -33,7 +33,7 @@ MARKET_PRIORITY = {
 # Supported Australian bookmakers
 SUPPORTED_BOOKMAKERS = [
     'sportsbet', 'tab', 'pointsbet', 'ladbrokes', 'neds', 'unibet',
-    'betright', 'bluebet', 'topbetta', 'betr', 'picklebet'
+    'betright', 'bluebet', 'topbetta', 'betr', 'picklebet', 'bet365'
 ]
 
 # Soccer-related keywords to filter out
@@ -600,6 +600,7 @@ class BookmakerSelectView(discord.ui.View):
                 discord.SelectOption(label="TopBetta", value="topbetta", emoji="🔝"),
                 discord.SelectOption(label="Betr", value="betr", emoji="💰"),
                 discord.SelectOption(label="PickleBet", value="picklebet", emoji="🥒"),
+                discord.SelectOption(label="Bet365", value="bet365", emoji="🟢"),
             ],
             custom_id="bookmaker_select"
         )
