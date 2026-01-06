@@ -602,11 +602,11 @@ class BookmakerSelectView(discord.ui.View):
                 discord.SelectOption(label="Neds", value="neds", emoji="🏈"),
                 discord.SelectOption(label="Unibet", value="unibet", emoji="⚽"),
                 discord.SelectOption(label="BetRight", value="betright", emoji="✅"),
-                discord.SelectOption(label="Betr", value="betr_au", emoji="�"),
-                discord.SelectOption(label="Bet365", value="bet365_au", emoji="�", description="AFL & NRL only"),
-                discord.SelectOption(label="Betfair Exchange", value="betfair_ex_au", emoji="�"),
+                discord.SelectOption(label="Betr", value="betr_au", emoji="💵"),
+                discord.SelectOption(label="Bet365", value="bet365_au", emoji="🟢", description="AFL & NRL only"),
+                discord.SelectOption(label="Betfair Exchange", value="betfair_ex_au", emoji="🔄"),
                 discord.SelectOption(label="PlayUp", value="playup", emoji="🎮"),
-                discord.SelectOption(label="BoomBet", value="boombet", emoji="�"),
+                discord.SelectOption(label="BoomBet", value="boombet", emoji="💥"),
             ],
             custom_id="bookmaker_select"
         )
