@@ -65,6 +65,10 @@ class ArbitrageBot:
         self.cache_expiry = {}
         self.search_task = None
         self.session = None
+        # Cache durations (in seconds)
+        self.SPORTS_CACHE_DURATION = 3600  # 1 hour for sports list
+        self.ODDS_CACHE_DURATION = 300     # 5 minutes for odds data
+        self.last_full_fetch = None        # Track last complete data fetch
     
     async def get_session(self):
         """Get or create aiohttp session"""
@@ -93,9 +97,9 @@ class ArbitrageBot:
             print(f"Added search to queue for user {user_id}: ${amount} on {bookmaker} ({search_mode} mode)")
     
     async def process_queue(self):
-        """Background task that processes the search queue every 5 minutes"""
+        """Background task that processes the search queue every 15 minutes"""
         await bot.wait_until_ready()
-        print("Queue processor started - checking every 5 minutes")
+        print("Queue processor started - checking every 15 minutes")
         
         while not bot.is_closed():
             try:
@@ -103,12 +107,17 @@ class ArbitrageBot:
                     if search_queue:
                         print(f"Processing {len(search_queue)} queued searches...")
                         
+                        # Fetch all odds data ONCE for all queued searches
+                        all_opportunities = await self.fetch_all_opportunities_cached()
+                        
                         for search in search_queue[:]:  # Copy to avoid modification during iteration
                             search['attempts'] += 1
-                            print(f"Attempting search {search['attempts']} for user {search['user_id']}")
+                            print(f"Checking cached data for user {search['user_id']} (attempt {search['attempts']})")
                             
                             try:
-                                opportunity = await self.find_best_opportunity(
+                                # Find best opportunity from cached data
+                                opportunity = self.find_opportunity_from_cache(
+                                    all_opportunities,
                                     search['bookmaker'], 
                                     search['amount'], 
                                     search['search_mode']
@@ -117,7 +126,7 @@ class ArbitrageBot:
                                 if opportunity:
                                     # Found an opportunity! Notify the user via DM
                                     embed = self.create_opportunity_embed(opportunity, search['search_mode'])
-                                    embed.set_footer(text=f"✅ Found after {search['attempts']} search(es) | Searched every 5 minutes")
+                                    embed.set_footer(text=f"✅ Found after {search['attempts']} search(es) | Searched every 15 minutes")
                                     
                                     try:
                                         # Send as DM to keep it private
@@ -151,8 +160,8 @@ class ArbitrageBot:
                                 else:
                                     print(f"No opportunity found yet for user {search['user_id']}")
                                     
-                                    # Remove after 24 hours (288 attempts at 5 min intervals)
-                                    if search['attempts'] >= 288:
+                                    # Remove after 24 hours (96 attempts at 15 min intervals)
+                                    if search['attempts'] >= 96:
                                         try:
                                             user = await bot.fetch_user(search['user_id'])
                                             if user:
@@ -173,8 +182,8 @@ class ArbitrageBot:
             except Exception as e:
                 print(f"Error in queue processor: {e}")
             
-            # Wait 5 minutes before next check
-            await asyncio.sleep(300)  # 300 seconds = 5 minutes
+            # Wait 15 minutes before next check (saves API credits)
+            await asyncio.sleep(900)  # 900 seconds = 15 minutes
     
     def is_soccer_related(self, text: str) -> bool:
         """Check if text contains soccer-related keywords"""
@@ -182,7 +191,16 @@ class ArbitrageBot:
         return any(keyword in text_lower for keyword in SOCCER_KEYWORDS)
     
     async def get_sports(self) -> List[Dict]:
-        """Fetch available sports from The Odds API"""
+        """Fetch available sports from The Odds API (with caching)"""
+        cache_key = 'sports_list'
+        now = datetime.now()
+        
+        # Check cache first
+        if cache_key in self.cache and cache_key in self.cache_expiry:
+            if now < self.cache_expiry[cache_key]:
+                print("Using cached sports list")
+                return self.cache[cache_key]
+        
         try:
             print("Fetching sports list from API...")
             session = await self.get_session()
@@ -194,7 +212,8 @@ class ArbitrageBot:
                 if response.status != 200:
                     error_text = await response.text()
                     print(f"Error fetching sports: HTTP {response.status} - {error_text}")
-                    return []
+                    # Return cached data if available, even if expired
+                    return self.cache.get(cache_key, [])
                 
                 sports = await response.json()
                 print(f"Fetched {len(sports)} total sports from API")
@@ -227,7 +246,13 @@ class ArbitrageBot:
                         print(f"  ✓ Added sport: {sport.get('title')}")
                 
                 print(f"Filtered to {len(filtered_sports)} sports for scanning")
-                return filtered_sports[:10]  # Hard limit to prevent too many API calls
+                
+                # Cache the results
+                result = filtered_sports[:10]
+                self.cache[cache_key] = result
+                self.cache_expiry[cache_key] = now + timedelta(seconds=self.SPORTS_CACHE_DURATION)
+                
+                return result  # Hard limit to prevent too many API calls
         except Exception as e:
             print(f"Error fetching sports: {e}")
             import traceback
@@ -235,7 +260,17 @@ class ArbitrageBot:
             return []
     
     async def get_odds(self, sport_key: str, markets: str) -> List[Dict]:
-        """Fetch odds for a specific sport and market"""
+        """Fetch odds for a specific sport and market (with caching)"""
+        cache_key = f'odds_{sport_key}_{markets}'
+        now = datetime.now()
+        
+        # Check cache first
+        if cache_key in self.cache and cache_key in self.cache_expiry:
+            if now < self.cache_expiry[cache_key]:
+                cached_data = self.cache[cache_key]
+                print(f"  → Using cached {len(cached_data)} events for {sport_key}/{markets}")
+                return cached_data
+        
         try:
             session = await self.get_session()
             url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
@@ -250,24 +285,167 @@ class ArbitrageBot:
             async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
                 if response.status == 401:
                     print(f"  ⚠ API key unauthorized for {sport_key}/{markets}")
-                    return []
+                    return self.cache.get(cache_key, [])
                 elif response.status == 422:
-                    # Market not available for this sport, skip silently
+                    # Market not available for this sport, cache empty result
+                    self.cache[cache_key] = []
+                    self.cache_expiry[cache_key] = now + timedelta(seconds=self.ODDS_CACHE_DURATION)
                     return []
                 elif response.status != 200:
                     error_text = await response.text()
                     print(f"  ⚠ Error fetching odds for {sport_key}/{markets}: HTTP {response.status}")
-                    return []
+                    return self.cache.get(cache_key, [])
                 
                 events = await response.json()
-                print(f"  → Found {len(events)} events for {sport_key}/{markets}")
+                print(f"  → Fetched {len(events)} events for {sport_key}/{markets}")
+                
+                # Cache the results
+                self.cache[cache_key] = events
+                self.cache_expiry[cache_key] = now + timedelta(seconds=self.ODDS_CACHE_DURATION)
+                
                 return events
         except asyncio.TimeoutError:
             print(f"  ⚠ Timeout fetching odds for {sport_key}/{markets}")
-            return []
+            return self.cache.get(cache_key, [])
         except Exception as e:
             print(f"  ⚠ Error fetching odds for {sport_key}/{markets}: {e}")
+            return self.cache.get(cache_key, [])
+    
+    async def fetch_all_opportunities_cached(self) -> List[Dict]:
+        """Fetch all odds data once and extract all possible opportunities.
+        This dramatically reduces API calls by fetching once and reusing for all queue items.
+        """
+        print("\n" + "="*60)
+        print("Fetching all opportunities (single API batch)")
+        print("="*60)
+        
+        all_opportunities = []
+        sports = await self.get_sports()
+        if not sports:
+            print("❌ No sports available")
             return []
+        
+        # Fetch h2h,spreads,totals in ONE call per sport (saves 2 API calls per sport)
+        markets_combined = 'h2h,spreads,totals'
+        
+        for sport in sports:
+            sport_key = sport['key']
+            sport_title = sport['title']
+            print(f"\n📊 Fetching {sport_title}...")
+            
+            events = await self.get_odds(sport_key, markets_combined)
+            
+            for event in events:
+                # Filter events happening within 7 days
+                try:
+                    commence_time = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
+                    if commence_time > datetime.now().astimezone() + timedelta(days=7):
+                        continue
+                except:
+                    continue
+                
+                home_team = event.get('home_team', '')
+                away_team = event.get('away_team', '')
+                
+                if self.is_soccer_related(home_team) or self.is_soccer_related(away_team):
+                    continue
+                
+                bookmakers = event.get('bookmakers', [])
+                
+                # Extract all 2-way opportunities from this event
+                for bookmaker in bookmakers:
+                    bookmaker_key = bookmaker['key']
+                    
+                    for market in bookmaker.get('markets', []):
+                        market_type = market['key']
+                        outcomes = market.get('outcomes', [])
+                        
+                        if len(outcomes) != 2:  # Only 2-way markets
+                            continue
+                        
+                        for i, bonus_outcome in enumerate(outcomes):
+                            hedge_outcome = outcomes[1 - i]
+                            bonus_odds = bonus_outcome['price']
+                            
+                            # Find best hedge odds from other bookmakers
+                            best_hedge_odds = 0
+                            best_hedge_bookmaker = None
+                            
+                            for other_bookmaker in bookmakers:
+                                if other_bookmaker['key'] == bookmaker_key:
+                                    continue
+                                
+                                for other_market in other_bookmaker.get('markets', []):
+                                    if other_market['key'] != market_type:
+                                        continue
+                                    
+                                    for outcome in other_market.get('outcomes', []):
+                                        if outcome['name'] == hedge_outcome['name']:
+                                            if outcome['price'] > best_hedge_odds:
+                                                best_hedge_odds = outcome['price']
+                                                best_hedge_bookmaker = other_bookmaker['key']
+                            
+                            if not best_hedge_bookmaker or best_hedge_odds == 0:
+                                continue
+                            
+                            market_display = {
+                                'h2h': 'Head to Head',
+                                'spreads': 'Spread',
+                                'totals': 'Totals'
+                            }.get(market_type, market_type)
+                            
+                            all_opportunities.append({
+                                'sport_title': sport_title,
+                                'home_team': home_team,
+                                'away_team': away_team,
+                                'market_type': market_type,
+                                'market_display': market_display,
+                                'bonus_bookmaker': bookmaker_key,
+                                'bonus_outcome': bonus_outcome['name'],
+                                'bonus_odds_decimal': bonus_odds,
+                                'hedge_bookmaker': best_hedge_bookmaker,
+                                'hedge_outcome': hedge_outcome['name'],
+                                'hedge_odds_decimal': best_hedge_odds,
+                            })
+            
+            # Small delay between sports to be nice to the API
+            await asyncio.sleep(0.3)
+        
+        print(f"\n✅ Extracted {len(all_opportunities)} potential opportunities")
+        return all_opportunities
+    
+    def find_opportunity_from_cache(self, all_opportunities: List[Dict], selected_bookmaker: str, amount: float, search_mode: str = 'best') -> Optional[Dict]:
+        """Find the best opportunity for a specific bookmaker from pre-fetched data.
+        This uses NO API calls - just filters the cached opportunities.
+        """
+        best_opportunity = None
+        best_return = float('-inf')
+        quick_threshold = amount * 0.60  # 60% minimum for quick mode
+        
+        for opp in all_opportunities:
+            if opp['bonus_bookmaker'] != selected_bookmaker:
+                continue
+            
+            # Calculate returns for this amount
+            calc = self.calculate_bonus_bet_opportunity(
+                opp['bonus_odds_decimal'],
+                opp['hedge_odds_decimal'],
+                amount
+            )
+            
+            if calc['guaranteed_return'] > best_return:
+                best_return = calc['guaranteed_return']
+                best_opportunity = {
+                    **opp,
+                    'bonus_amount': amount,
+                    **calc
+                }
+                
+                # In quick mode, return first opportunity that meets threshold
+                if search_mode == 'quick' and calc['guaranteed_return'] >= quick_threshold:
+                    return best_opportunity
+        
+        return best_opportunity
     
     def calculate_bonus_bet_opportunity(self, bonus_odds: float, hedge_odds: float, amount: float) -> Dict:
         """Calculate the returns for a bonus bet opportunity"""
@@ -298,6 +476,8 @@ class ArbitrageBot:
     async def find_best_opportunity(self, selected_bookmaker: str, amount: float, search_mode: str = 'best') -> Optional[Dict]:
         """Find the single best 2-way opportunity for the selected bookmaker
         
+        Uses combined market fetch to minimize API calls (1 call per sport instead of 3).
+        
         Args:
             selected_bookmaker: The bookmaker where the bonus bet will be placed
             amount: The bonus bet amount
@@ -307,141 +487,25 @@ class ArbitrageBot:
         print(f"Starting search for {selected_bookmaker} - ${amount} ({search_mode} mode)")
         print(f"{'='*60}")
         
-        best_opportunity = None
-        best_return = float('-inf')
-        quick_threshold = amount * 0.60  # 60% minimum for quick mode
+        # Use the batch fetch and filter approach to minimize API calls
+        all_opportunities = await self.fetch_all_opportunities_cached()
         
-        # Get available sports
-        sports = await self.get_sports()
-        if not sports:
-            print("❌ No sports available to search")
+        if not all_opportunities:
+            print("❌ No opportunities available")
             return None
         
-        # Markets to check (all 2-way)
-        markets_to_check = ['h2h', 'spreads', 'totals']
+        # Find best opportunity from the fetched data
+        best_opportunity = self.find_opportunity_from_cache(
+            all_opportunities, 
+            selected_bookmaker, 
+            amount, 
+            search_mode
+        )
         
-        total_events_checked = 0
-        opportunities_found = 0
-        
-        for sport in sports:
-            sport_key = sport['key']
-            sport_title = sport['title']
-            print(f"\n📊 Checking {sport_title}...")
-            
-            # Check each market type
-            for market_type in markets_to_check:
-                events = await self.get_odds(sport_key, market_type)
-                total_events_checked += len(events)
-                
-                for event in events:
-                    # Filter events happening within 7 days
-                    commence_time = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
-                    if commence_time > datetime.now().astimezone() + timedelta(days=7):
-                        continue
-                    
-                    home_team = event.get('home_team', '')
-                    away_team = event.get('away_team', '')
-                    
-                    # Skip if teams contain soccer keywords
-                    if self.is_soccer_related(home_team) or self.is_soccer_related(away_team):
-                        continue
-                    
-                    bookmakers = event.get('bookmakers', [])
-                    
-                    # Find odds from selected bookmaker
-                    bonus_bookmaker_data = None
-                    for bookmaker in bookmakers:
-                        if bookmaker['key'] == selected_bookmaker:
-                            bonus_bookmaker_data = bookmaker
-                            break
-                    
-                    if not bonus_bookmaker_data:
-                        continue
-                    
-                    # Get markets for this bookmaker
-                    for market in bonus_bookmaker_data.get('markets', []):
-                        if market['key'] != market_type:
-                            continue
-                        
-                        outcomes = market.get('outcomes', [])
-                        if len(outcomes) != 2:  # Only 2-way markets
-                            continue
-                        
-                        # Try both outcomes as the bonus bet
-                        for i, bonus_outcome in enumerate(outcomes):
-                            hedge_outcome = outcomes[1 - i]
-                            
-                            bonus_odds = bonus_outcome['price']
-                            
-                            # Find best hedge odds from other bookmakers
-                            best_hedge_odds = 0
-                            best_hedge_bookmaker = None
-                            
-                            for other_bookmaker in bookmakers:
-                                if other_bookmaker['key'] == selected_bookmaker:
-                                    continue
-                                
-                                for other_market in other_bookmaker.get('markets', []):
-                                    if other_market['key'] != market_type:
-                                        continue
-                                    
-                                    for outcome in other_market.get('outcomes', []):
-                                        if outcome['name'] == hedge_outcome['name']:
-                                            if outcome['price'] > best_hedge_odds:
-                                                best_hedge_odds = outcome['price']
-                                                best_hedge_bookmaker = other_bookmaker['key']
-                            
-                            if not best_hedge_bookmaker or best_hedge_odds == 0:
-                                continue
-                            
-                            # Calculate opportunity
-                            calc = self.calculate_bonus_bet_opportunity(bonus_odds, best_hedge_odds, amount)
-                            
-                            # Track best opportunity
-                            if calc['guaranteed_return'] > best_return:
-                                best_return = calc['guaranteed_return']
-                                opportunities_found += 1
-                                
-                                market_display = {
-                                    'h2h': 'Head to Head',
-                                    'spreads': 'Spread',
-                                    'totals': 'Totals'
-                                }.get(market_type, market_type)
-                                
-                                best_opportunity = {
-                                    'sport_title': sport_title,
-                                    'home_team': home_team,
-                                    'away_team': away_team,
-                                    'market_display': market_display,
-                                    'bonus_bookmaker': selected_bookmaker,
-                                    'bonus_outcome': bonus_outcome['name'],
-                                    'bonus_odds_decimal': bonus_odds,
-                                    'bonus_amount': amount,
-                                    'hedge_bookmaker': best_hedge_bookmaker,
-                                    'hedge_outcome': hedge_outcome['name'],
-                                    'hedge_odds_decimal': best_hedge_odds,
-                                    **calc
-                                }
-                                
-                                print(f"    💰 New best: {calc['return_percentage']:.1f}% return (${calc['guaranteed_return']:.2f})")
-                                
-                                # In quick mode, return first opportunity that meets threshold
-                                if search_mode == 'quick' and calc['guaranteed_return'] >= quick_threshold:
-                                    print(f"\n✅ Quick mode threshold met! Returning result.")
-                                    return best_opportunity
-                
-                # Add small delay between API calls to prevent rate limiting
-                await asyncio.sleep(0.5)
-        
-        print(f"\n{'='*60}")
-        print(f"Search complete:")
-        print(f"  • Events checked: {total_events_checked}")
-        print(f"  • Opportunities found: {opportunities_found}")
         if best_opportunity:
-            print(f"  • Best return: {best_opportunity['return_percentage']:.1f}%")
+            print(f"✅ Found opportunity: {best_opportunity['return_percentage']:.1f}% return")
         else:
-            print(f"  • No opportunities found")
-        print(f"{'='*60}\n")
+            print(f"❌ No opportunities found for {selected_bookmaker}")
         
         return best_opportunity
 
@@ -563,7 +627,7 @@ class SearchModeView(discord.ui.View):
                     description=(
                         f"No immediate opportunity found for **{self.bookmaker.title()}**.\n\n"
                         f"**Don't worry!** I'll keep searching for you:\n"
-                        f"• Checking every **5 minutes**\n"
+                        f"• Checking every **15 minutes**\n"
                         f"• You'll be **@mentioned** when found\n"
                         f"• Search expires after **24 hours**\n\n"
                         f"**Your search:**\n"
