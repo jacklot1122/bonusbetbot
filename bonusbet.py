@@ -19,7 +19,7 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Configuration
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-ODDS_API_KEY = os.getenv('ODDS_API_KEY', '401d62b208c11ee6fdfab511972c67b7')
+ODDS_API_KEY = os.getenv('ODDS_API_KEY')
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 CHANNEL_ID = int(os.getenv('CHANNEL_ID', '0'))  # Set your channel ID
 
