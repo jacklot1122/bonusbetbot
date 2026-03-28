@@ -191,14 +191,125 @@ class ArbitrageBot:
         return any(keyword in text_lower for keyword in SOCCER_KEYWORDS)
     
     async def get_sports(self) -> List[Dict]:
-        """Live odds fetching is disabled"""
-        print("Live odds fetching is disabled")
-        return []
+        """Fetch available sports from The Odds API (with caching)"""
+        cache_key = 'sports_list'
+        now = datetime.now()
+        
+        # Check cache first
+        if cache_key in self.cache and cache_key in self.cache_expiry:
+            if now < self.cache_expiry[cache_key]:
+                print("Using cached sports list")
+                return self.cache[cache_key]
+        
+        try:
+            print("Fetching sports list from API...")
+            session = await self.get_session()
+            url = f"{ODDS_API_BASE}/sports"
+            params = {'apiKey': ODDS_API_KEY}
+            
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                print(f"Sports API response status: {response.status}")
+                if response.status != 200:
+                    error_text = await response.text()
+                    print(f"Error fetching sports: HTTP {response.status} - {error_text}")
+                    # Return cached data if available, even if expired
+                    return self.cache.get(cache_key, [])
+                
+                sports = await response.json()
+                print(f"Fetched {len(sports)} total sports from API")
+                
+                # Filter out soccer and inactive sports
+                # Limit to popular Australian sports to reduce API calls
+                priority_sports = ['aussierules_afl', 'rugbyleague_nrl', 'basketball_nba', 'cricket_big_bash']
+                filtered_sports = []
+                
+                # First add priority sports if they're active
+                for sport in sports:
+                    if not sport.get('active', False):
+                        continue
+                    if self.is_soccer_related(sport.get('title', '')):
+                        continue
+                    if sport.get('key') in priority_sports:
+                        filtered_sports.append(sport)
+                        print(f"  \u2713 Added priority sport: {sport.get('title')}")
+                
+                # Then add other sports up to limit of 10
+                for sport in sports:
+                    if len(filtered_sports) >= 10:
+                        break
+                    if not sport.get('active', False):
+                        continue
+                    if self.is_soccer_related(sport.get('title', '')):
+                        continue
+                    if sport not in filtered_sports:
+                        filtered_sports.append(sport)
+                        print(f"  \u2713 Added sport: {sport.get('title')}")
+                
+                print(f"Filtered to {len(filtered_sports)} sports for scanning")
+                
+                # Cache the results
+                result = filtered_sports[:10]
+                self.cache[cache_key] = result
+                self.cache_expiry[cache_key] = now + timedelta(seconds=self.SPORTS_CACHE_DURATION)
+                
+                return result  # Hard limit to prevent too many API calls
+        except Exception as e:
+            print(f"Error fetching sports: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     async def get_odds(self, sport_key: str, markets: str) -> List[Dict]:
-        """Live odds fetching is disabled"""
-        print("Live odds fetching is disabled")
-        return []
+        """Fetch odds for a specific sport and market (with caching)"""
+        cache_key = f'odds_{sport_key}_{markets}'
+        now = datetime.now()
+        
+        # Check cache first
+        if cache_key in self.cache and cache_key in self.cache_expiry:
+            if now < self.cache_expiry[cache_key]:
+                cached_data = self.cache[cache_key]
+                print(f"  \u2192 Using cached {len(cached_data)} events for {sport_key}/{markets}")
+                return cached_data
+        
+        try:
+            session = await self.get_session()
+            url = f"{ODDS_API_BASE}/sports/{sport_key}/odds"
+            params = {
+                'apiKey': ODDS_API_KEY,
+                'regions': 'au',
+                'markets': markets,
+                'oddsFormat': 'decimal',
+                'bookmakers': ','.join(SUPPORTED_BOOKMAKERS)
+            }
+            
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                if response.status == 401:
+                    print(f"  \u26a0 API key unauthorized for {sport_key}/{markets}")
+                    return self.cache.get(cache_key, [])
+                elif response.status == 422:
+                    # Market not available for this sport, cache empty result
+                    self.cache[cache_key] = []
+                    self.cache_expiry[cache_key] = now + timedelta(seconds=self.ODDS_CACHE_DURATION)
+                    return []
+                elif response.status != 200:
+                    error_text = await response.text()
+                    print(f"  \u26a0 Error fetching odds for {sport_key}/{markets}: HTTP {response.status}")
+                    return self.cache.get(cache_key, [])
+                
+                events = await response.json()
+                print(f"  \u2192 Fetched {len(events)} events for {sport_key}/{markets}")
+                
+                # Cache the results
+                self.cache[cache_key] = events
+                self.cache_expiry[cache_key] = now + timedelta(seconds=self.ODDS_CACHE_DURATION)
+                
+                return events
+        except asyncio.TimeoutError:
+            print(f"  \u26a0 Timeout fetching odds for {sport_key}/{markets}")
+            return self.cache.get(cache_key, [])
+        except Exception as e:
+            print(f"  \u26a0 Error fetching odds for {sport_key}/{markets}: {e}")
+            return self.cache.get(cache_key, [])
     
     async def fetch_all_opportunities_cached(self) -> List[Dict]:
         """Fetch all odds data once and extract all possible opportunities.
@@ -225,10 +336,13 @@ class ArbitrageBot:
             events = await self.get_odds(sport_key, markets_combined)
             
             for event in events:
-                # Filter events happening within 7 days
+                # Filter out live/in-play events (already started)
                 try:
                     commence_time = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
-                    if commence_time > datetime.now().astimezone() + timedelta(days=7):
+                    now_aware = datetime.now().astimezone()
+                    if commence_time <= now_aware:
+                        continue  # Skip live/in-play games
+                    if commence_time > now_aware + timedelta(days=7):
                         continue
                 except:
                     continue
@@ -636,20 +750,18 @@ class PersistentView(discord.ui.View):
         custom_id='generate_bonus_bet_button'
     )
     async def generate_bonus_bet(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(
-            title="🚫 Live Odds Disabled",
-            description="Live bet odds fetching has been disabled. This feature is currently unavailable.",
-            color=0xff0000
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        modal = BonusBetModal()
+        await interaction.response.send_modal(modal)
 
 @bot.event
 async def on_ready():
     print(f'{bot.user} has logged in!')
     bot.add_view(PersistentView())
     
-    # Queue processor disabled - live odds fetching is off
-    print("Live odds fetching is disabled - queue processor not started")
+    # Start the queue processor
+    if not arb_bot.search_task or arb_bot.search_task.done():
+        arb_bot.search_task = bot.loop.create_task(arb_bot.process_queue())
+        print("Started background queue processor")
 
     if CHANNEL_ID:
         try:
