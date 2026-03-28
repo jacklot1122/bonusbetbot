@@ -1859,7 +1859,6 @@ SPORT_CATEGORIES = [
     {"key": "cricket", "label": "Cricket", "betfair_name": "Cricket", "emoji": "🏏"},
     {"key": "basketball", "label": "Basketball (NBA)", "betfair_name": "Basketball", "emoji": "🏀"},
     {"key": "american_football", "label": "American Football (NFL)", "betfair_name": "American Football", "emoji": "🏈"},
-    {"key": "baseball", "label": "Baseball (MLB)", "betfair_name": "Baseball", "emoji": "⚾"},
     {"key": "ice_hockey", "label": "Ice Hockey (NHL)", "betfair_name": "Ice Hockey", "emoji": "🏒"},
     {"key": "golf", "label": "Golf", "betfair_name": "Golf", "emoji": "🏌️"},
     {"key": "rugby_union", "label": "Rugby Union", "betfair_name": "Rugby Union", "emoji": "🏉"},
@@ -2196,8 +2195,6 @@ def get_sport_emoji(event_name, market_name):
         return "🏀"
     if "rugby" in name:
         return "🏉"
-    if "baseball" in name:
-        return "⚾"
     if "hockey" in name:
         return "🏒"
     return "🌐"
@@ -2215,7 +2212,7 @@ def get_selection_label(bet_type, sport_key=None):
         # Map sports to appropriate selection labels
         if sport_key in ["tennis", "golf"]:
             return "Player"
-        elif sport_key in ["soccer", "basketball", "american_football", "baseball", "ice_hockey", "rugby_union", "rugby_league", "cricket"]:
+        elif sport_key in ["soccer", "basketball", "american_football", "ice_hockey", "rugby_union", "rugby_league", "cricket"]:
             return "Team"
         else:
             return "Selection"
@@ -3735,7 +3732,7 @@ class SetAllSportsMinButton(discord.ui.Button):
         amount_view.add_item(amount_select)
         await interaction.followup.send(
             "**Set minimum $ matched for ALL sports at once:**\n"
-            "This will apply to: Soccer, Tennis, Cricket, Basketball, American Football, Baseball, Ice Hockey, Golf, Rugby Union, Rugby League",
+            "This will apply to: Soccer, Tennis, Cricket, Basketball, American Football, Ice Hockey, Golf, Rugby Union, Rugby League",
             view=amount_view, 
             ephemeral=True
         )
@@ -6122,7 +6119,6 @@ class SetPrioritySportsButton(discord.ui.Button):
             discord.SelectOption(label="🎾 Tennis", value="tennis"),
             discord.SelectOption(label="🏈 American Football", value="americanfootball"),
             discord.SelectOption(label="🏉 Rugby", value="rugby"),
-            discord.SelectOption(label="⚾ Baseball", value="baseball"),
             discord.SelectOption(label="🏒 Ice Hockey", value="icehockey"),
             discord.SelectOption(label="❌ Clear All", value="clear"),
         ]
