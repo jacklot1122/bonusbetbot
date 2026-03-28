@@ -50,6 +50,15 @@ SOCCER_KEYWORDS = [
     'psg', 'bayern', 'dortmund', 'atletico', 'tottenham', 'milan', 'inter'
 ]
 
+# Baseball/MLB sport keys to filter out
+BASEBALL_SPORT_KEYS = [
+    'baseball_mlb', 'baseball_ncaa', 'baseball_kbo', 'baseball_npb',
+]
+
+def is_baseball_sport(sport_key: str) -> bool:
+    """Check if a sport key is baseball-related"""
+    return sport_key in BASEBALL_SPORT_KEYS or sport_key.startswith('baseball_')
+
 def create_interface_embed():
     """Create the main interface embed"""
     embed = discord.Embed(
@@ -229,6 +238,8 @@ class ArbitrageBot:
                         continue
                     if self.is_soccer_related(sport.get('title', '')):
                         continue
+                    if is_baseball_sport(sport.get('key', '')):
+                        continue
                     if sport.get('key') in priority_sports:
                         filtered_sports.append(sport)
                         print(f"  \u2713 Added priority sport: {sport.get('title')}")
@@ -240,6 +251,8 @@ class ArbitrageBot:
                     if not sport.get('active', False):
                         continue
                     if self.is_soccer_related(sport.get('title', '')):
+                        continue
+                    if is_baseball_sport(sport.get('key', '')):
                         continue
                     if sport not in filtered_sports:
                         filtered_sports.append(sport)
