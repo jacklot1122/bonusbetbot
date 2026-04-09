@@ -55,9 +55,18 @@ BASEBALL_SPORT_KEYS = [
     'baseball_mlb', 'baseball_ncaa', 'baseball_kbo', 'baseball_npb',
 ]
 
+# Boxing sport keys to filter out
+BOXING_SPORT_KEYS = [
+    'boxing_boxing',
+]
+
 def is_baseball_sport(sport_key: str) -> bool:
     """Check if a sport key is baseball-related"""
     return sport_key in BASEBALL_SPORT_KEYS or sport_key.startswith('baseball_')
+
+def is_boxing_sport(sport_key: str) -> bool:
+    """Check if a sport key is boxing-related"""
+    return sport_key in BOXING_SPORT_KEYS or sport_key.startswith('boxing_')
 
 def create_interface_embed():
     """Create the main interface embed"""
@@ -240,10 +249,12 @@ class ArbitrageBot:
                         continue
                     if is_baseball_sport(sport.get('key', '')):
                         continue
+                    if is_boxing_sport(sport.get('key', '')):
+                        continue
                     if sport.get('key') in priority_sports:
                         filtered_sports.append(sport)
                         print(f"  \u2713 Added priority sport: {sport.get('title')}")
-                
+
                 # Then add other sports up to limit of 10
                 for sport in sports:
                     if len(filtered_sports) >= 10:
@@ -253,6 +264,8 @@ class ArbitrageBot:
                     if self.is_soccer_related(sport.get('title', '')):
                         continue
                     if is_baseball_sport(sport.get('key', '')):
+                        continue
+                    if is_boxing_sport(sport.get('key', '')):
                         continue
                     if sport not in filtered_sports:
                         filtered_sports.append(sport)

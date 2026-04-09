@@ -1,4 +1,4 @@
-# 2-Way Bonus Bet Turnover Discord Bot
+﻿# 2-Way Bonus Bet Turnover Discord Bot
 
 A Discord bot that helps users find the best 2-way arbitrage opportunities for bonus bet turnover on Australian bookmakers.
 
@@ -6,7 +6,7 @@ A Discord bot that helps users find the best 2-way arbitrage opportunities for b
 
 - 🎯 Finds single best 2-way opportunities
 - 💰 Calculates exact hedge amounts
-- 🚫 Excludes soccer (no 3-way markets)
+- 🚫 Excludes soccer, baseball, and boxing
 - 🌏 Supports Australian bookmakers
 - 🔒 Private ephemeral responses
 - ✅ No spam posting - intelligently updates existing interface
@@ -92,7 +92,7 @@ python bonusbet.py
 
 1. User clicks the "Generate a Bonus Bet for Me" button
 2. Bot prompts for bonus bet amount and bookmaker
-3. Bot searches for the best 2-way opportunity across all non-soccer sports
+3. Bot searches for the best 2-way opportunity across all non-soccer/baseball/boxing sports
 4. Returns a private message with:
    - Best market and odds
    - Exact bonus bet stake
@@ -110,3 +110,5 @@ python bonusbet.py
 ## License
 
 MIT License
+
+
